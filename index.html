@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF + Photo Viewer</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #fff;
+      overflow: hidden;
+    }
+
+    #pdfPane, #photoPane {
+      position: absolute;
+      inset: 0;
+    }
+
+    #pdfPane iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    #photoPane {
+      display: none;
+      background: #111;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+
+    #topbar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      box-sizing: border-box;
+      background: rgba(0,0,0,0.65);
+      z-index: 10;
+    }
+
+    #title {
+      font-size: 14px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      max-width: calc(100vw - 120px);
+    }
+
+    .btn {
+      border: 0;
+      background: #333;
+      color: #fff;
+      font-size: 18px;
+      width: 40px;
+      height: 36px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+
+    .btn:active { transform: scale(0.98); }
+
+    #viewerWrap {
+      position: absolute;
+      inset: 52px 0 0 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #photo {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+      cursor: default;
+    }
+
+    #leftTap, #rightTap {
+      position: absolute;
+      top: 52px;
+      bottom: 0;
+      width: 50%;
+      z-index: 5;
+    }
+    #leftTap { left: 0; }
+    #rightTap { right: 0; }
+
+    #loading {
+      position: absolute;
+      inset: 52px 0 0 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      background: #111;
+      z-index: 20;
+    }
+
+    #errorBox {
+      display: none;
+      padding: 16px;
+      max-width: 900px;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    #fullOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.95);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+
+    #fullOverlay img {
+      max-width: 100vw;
+      max-height: 100vh;
+      object-fit: contain;
+    }
+
+    #fullOverlay .closeFull {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 10px;
+      background: #333;
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="pdfPane">
+    <iframe id="pdfFrame" title="PDF viewer"></iframe>
+  </div>
+
+  <div id="photoPane">
+    <div id="topbar">
+      <div id="title">Photo viewer</div>
+      <div>
+        <button class="btn" id="prevBtn" title="Previous photo">‹</button>
+        <button class="btn" id="nextBtn" title="Next photo">›</button>
+        <button class="btn" id="expandBtn" title="Open full size">⤢</button>
+        <button class="btn" id="closeBtn" title="Close">X</button>
+      </div>
+    </div>
+
+    <div id="viewerWrap">
+      <div id="leftTap" aria-label="Previous photo"></div>
+      <div id="rightTap" aria-label="Next photo"></div>
+      <img id="photo" alt="Gallery photo" />
+    </div>
+
+    <div id="loading">Loading photos…</div>
+    <div id="errorBox"></div>
+  </div>
+
+  <div id="fullOverlay">
+    <button class="closeFull" id="closeFullBtn">X</button>
+    <img id="fullImage" alt="Full size photo" />
+  </div>
+
+<script>
+(() => {
+  const OWNER = "cottageclock";
+  const REPO = "Catalog1";
+  const DEFAULT_PDF = "Catalog.pdf";
+
+  const pdfPane = document.getElementById("pdfPane");
+  const photoPane = document.getElementById("photoPane");
+  const pdfFrame = document.getElementById("pdfFrame");
+  const photo = document.getElementById("photo");
+  const title = document.getElementById("title");
+  const loading = document.getElementById("loading");
+  const errorBox = document.getElementById("errorBox");
+  const fullOverlay = document.getElementById("fullOverlay");
+  const fullImage = document.getElementById("fullImage");
+
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+  const expandBtn = document.getElementById("expandBtn");
+  const closeBtn = document.getElementById("closeBtn");
+  const leftTap = document.getElementById("leftTap");
+  const rightTap = document.getElementById("rightTap");
+  const closeFullBtn = document.getElementById("closeFullBtn");
+
+  let images = [];
+  let index = 0;
+  let currentFolder = "";
+
+  function showPdf() {
+    photoPane.style.display = "none";
+    pdfPane.style.display = "block";
+    const url = new URL(DEFAULT_PDF, window.location.href).toString();
+    pdfFrame.src = url;
+  }
+
+  function showGallery() {
+    pdfPane.style.display = "none";
+    photoPane.style.display = "flex";
+  }
+
+  function setLoading(on) {
+    loading.style.display = on ? "flex" : "none";
+  }
+
+  function showError(msg) {
+    errorBox.style.display = "block";
+    errorBox.textContent = msg;
+  }
+
+  function clearError() {
+    errorBox.style.display = "none";
+    errorBox.textContent = "";
+  }
+
+  function extOk(name) {
+    return /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(name);
+  }
+
+  async function loadFolder(folderPath) {
+    currentFolder = folderPath;
+    setLoading(true);
+    clearError();
+
+    const api = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURI(folderPath)}`;
+    const res = await fetch(api, { headers: { "Accept": "application/vnd.github+json" } });
+
+    if (!res.ok) {
+      throw new Error("Could not load folder.");
+    }
+
+    const data = await res.json();
+    const files = Array.isArray(data) ? data : [];
+    images = files
+      .filter(item => item.type === "file" && extOk(item.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!images.length) {
+      throw new Error("No image files found in that folder.");
+    }
+
+    index = 0;
+    renderImage();
+    setLoading(false);
+  }
+
+  function renderImage() {
+    const item = images[index];
+    if (!item) return;
+
+    title.textContent = `${index + 1} / ${images.length} — ${currentFolder.split("/").pop()}`;
+    photo.src = item.download_url;
+    photo.alt = item.name;
+  }
+
+  function next() {
+    if (!images.length) return;
+    index = (index + 1) % images.length;
+    renderImage();
+  }
+
+  function prev() {
+    if (!images.length) return;
+    index = (index - 1 + images.length) % images.length;
+    renderImage();
+  }
+
+  function openFull() {
+    const item = images[index];
+    if (!item) return;
+    fullImage.src = item.download_url;
+    fullOverlay.style.display = "flex";
+  }
+
+  function closeFull() {
+    fullOverlay.style.display = "none";
+    fullImage.src = "";
+  }
+
+  prevBtn.onclick = prev;
+  nextBtn.onclick = next;
+  leftTap.onclick = prev;
+  rightTap.onclick = next;
+  expandBtn.onclick = openFull;
+  closeBtn.onclick = () => {
+    const base = new URL(window.location.href);
+    base.search = "";
+    base.hash = "";
+    window.location.href = base.toString();
+  };
+  closeFullBtn.onclick = closeFull;
+  fullOverlay.onclick = (e) => {
+    if (e.target === fullOverlay) closeFull();
+  };
+
+  photo.onclick = openFull;
+
+  document.addEventListener("keydown", (e) => {
+    if (photoPane.style.display !== "flex") return;
+    if (fullOverlay.style.display === "flex") {
+      if (e.key === "Escape") closeFull();
+      return;
+    }
+    if (e.key === "ArrowLeft") prev();
+    if (e.key === "ArrowRight") next();
+    if (e.key === "Escape") {
+      const base = new URL(window.location.href);
+      base.search = "";
+      base.hash = "";
+      window.location.href = base.toString();
+    }
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const folder = params.get("folder");
+
+  if (folder) {
+    showGallery();
+    loadFolder(folder).catch(err => {
+      setLoading(false);
+      showError(err.message);
+    });
+  } else {
+    showPdf();
+  }
+})();
+</script>
+</body>
+</html>
